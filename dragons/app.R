@@ -2,6 +2,7 @@ library(shiny)
 library(sf)
 library(tidyverse)
 library(ggspatial)
+library(gt)
 
 obs_to_coords <- function(df, coord_col, crs_add){
   coords.sfg <- df$coords
@@ -23,7 +24,7 @@ rawdata <- read_tsv("OdonataGA.csv")
 dobbs_data <- read_csv("mdobbs.csv")%>%
   rename(species = `...1`)%>%
   rename(name = `...2`)%>%
-  select(-`...3`, -`...163`, -`...164`)%>%
+  select(-`...3`, -`...163`, -`...163`)%>%
   mutate_all(~replace(., is.na(.), 0))%>%
   pivot_longer(Appling:Worth, names_to = "County", values_to = "Observed")
 
@@ -79,6 +80,7 @@ SpeciesMap <- function(speciestomap) {
     left_join(TaxaByCounty)%>%
     mutate(Present = ifelse(is.na(Observations), "No", "Yes"))%>%
     left_join(TaxaData.dobbs)%>%
+    select(-species, -name)%>%
     mutate(Present_dobbs = ifelse(Present=="No" & Observed=="X", "Yes", Present))
 
   attach(TaxaToMap)
@@ -107,33 +109,50 @@ county_table <- function(speciestomap){
   
   TaxaByCounty <- st_join(TaxaData, GeorgiaCounties)%>%
     st_drop_geometry()%>%
-    group_by(COUNTYNAME)%>%
+    group_by(County)%>%
     summarize(Observations = n())%>%
-    filter(!is.na(COUNTYNAME))%>%
+    filter(!is.na(County))%>%
     arrange(-Observations)%>%
-    gt::gt()
+    gt::gt()%>%
+    tab_header(
+      title = str_c("County level data for ", speciestomap, "."),
+      subtitle = str_c("There are ", nrow(TaxaData), " observations in this dataset.")
+    )%>%
+  tab_source_note(
+    source_note = "This table is based on iNaturalist and Odonata Central observation data as well as some museum specimen records downloaded from the Global Biodiversity Information Facility. This table does not include data from the archive compiled by Marion Dobbs."
+  )
   
   return(TaxaByCounty)
 }
 species_list <- function(county){
+  
   CountyList <- st_join(data.sf, GeorgiaCounties)%>%
     st_drop_geometry()%>%
-    filter(COUNTYNAME==county)%>%
+    filter(County==county)%>%
     dplyr::select(Species_cleaned)%>%
-    distinct()%>%
+    group_by(Species_cleaned)%>%
+    summarize(Observations = n())%>%
     arrange(Species_cleaned)%>%
-    rename(Species = Species_cleaned)%>%
-    filter(!is.na(Species))%>%
-    gt::gt()
+    rename(Species = Species_cleaned)
   
-  return(CountyList)
+  table <- CountyList%>%
+    gt::gt()%>%
+    tab_header(
+      title = str_c(county, " county species list."),
+      subtitle = str_c(nrow(CountyList), " species observed.")
+    )%>%
+    tab_source_note(
+      source_note = "This table is based on iNaturalist and Odonata Central observation data as well as some museum specimen records downloaded from the Global Biodiversity Information Facility. This table does not include data from the archive compiled by Marion Dobbs."
+    )
+  
+  return(table)
 }
 CountyMap <- function(county){
   obs_county <- st_join(data.sf, GeorgiaCounties)%>%
-    filter(COUNTYNAME==county)
+    filter(County==county)
   
   Extent <- GeorgiaCounties %>%
-    filter(COUNTYNAME==county)%>%
+    filter(County==county)%>%
     st_bbox()
   
   ggplot()+
@@ -141,7 +160,7 @@ CountyMap <- function(county){
             fill = "grey96",
             color = "grey41", 
             size = 0.10)+
-    geom_sf(data = filter(GeorgiaCounties, COUNTYNAME==county),
+    geom_sf(data = filter(GeorgiaCounties, County==county),
             fill = "grey99",
             color = "grey22",
             size = 0.8)+
@@ -173,10 +192,10 @@ SpeciesList <- data.sf%>%
 
 CountyList <- GeorgiaCounties %>%
   st_drop_geometry()%>%
-  dplyr::select(COUNTYNAME)%>%
+  dplyr::select(County)%>%
   distinct()%>%
-  arrange(COUNTYNAME)%>%
-  pull(COUNTYNAME)
+  arrange(County)%>%
+  pull(County)
 
 #__________________________________________________
 
@@ -187,7 +206,7 @@ ui <- fluidPage(
     tabPanel("Explore data by species",
              fluidRow(column(4, 
                              selectInput(inputId = "species", label = "Choose Species", choices = SpeciesList),
-                             tableOutput("Summary_Stats"),
+                             gt_output("Summary_Stats"),
              ),
              column(8, 
                     plotOutput("Map")
@@ -196,7 +215,7 @@ ui <- fluidPage(
     tabPanel("Explore data by county",
              fluidRow(column(4,
              selectInput(inputId = "county", label = "Choose County", choices = CountyList),
-             tableOutput("County_List"),
+             gt_output("County_List"),
              ),
              column(8,
                     plotOutput("Map_county")
@@ -209,8 +228,8 @@ ui <- fluidPage(
 #Define server
 server <- function(input, output, session) {
   output$Map <- renderPlot(SpeciesMap(input$species))
-  output$Summary_Stats <- renderTable(county_table(input$species))
-  output$County_List <- renderTable(species_list(input$county))
+  output$Summary_Stats <- render_gt(county_table(input$species))
+  output$County_List <- render_gt(species_list(input$county))
   output$Map_county <- renderPlot(CountyMap(input$county))
 }
 
